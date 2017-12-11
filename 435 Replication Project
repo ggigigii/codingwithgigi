@@ -1,0 +1,326 @@
+## Still working on how to upload .Rmd files from RStudio into github...
+# WiP
+
+Below is a replication paper on Thomas Buser's Published Paper: The Effect of Income on Religiousness
+---
+title: ""
+author: ""
+date: ""
+output:
+  html_document:
+    fig_width: 5
+    fig_height: 3
+    code_folding: show
+---
+#### Title: The Effect of Income on Religiousness [Replication Project]
+##### Author: Gigi Lin
+##### Date: December 4, 2017
+
+> Part I: Introduction  
+
+Thomas Buser uses self-collected survey data to analyze the effects of income shocks on religious behavior. He undertakes a regression discontinuity design on the change in eligibility for a government cash transfer on 3 income measures: attendance per month (`attendpermonth`), identification with Evangelical Christianity (`protestant`), and self-rated religiousness (`religiousness`). The paper and dataset were retrieved from [AEJ](https://www.aeaweb.org/articles?id=10.1257/app.20140162).
+There are 3 questions to be answered in this paper:  
+1. Do people become more or less religious when they become richer?  
+2. Do people change their religion when they become richer?  
+3. Do people change attendance frequency when they become richer?  
+
+There have been published results that show the relationship of religion on individual behavior, but Buser asserts his paper as the first of its kind to look at the reverse relationship. He utilizes Regression Discontinuity Design (RDD) in looking at the effects of a household being eligible to receive the cash transfer, and those that do not receive it. RDD employs a discontinuous assignment rule that randomizes in determining whether households are placed in the treatment or control group. As Ecuador is a lower middle income country with high poverty levels and high inequality, the eligibility of the government cash transfer program may have significant income effects on poorer households. Depending on where a household is initially placed within the wealth index, it asserts their position to receive the transfer. 
+
+This paper is interesting as it examines the institutional rule of sorting households into either group, and whether the income shock results in statistically significant changes in attendance, identification, or self-rated religiousness. The idea is to compare households in a small neighbourhood around the cuttoff (above/below). There is not much need for controls as the only difference between the households near the threshold is that one receives the treatment whereas the other does not. The difference in status allows us to determine the treatment effect.
+
+> Part II: Data Description    
+
+The survey consists of randomly sampled households from poor neighborhoods in 3 urban centers: Guayaquil, Quito, and Santo Domingon. The survey takers collected data on characteristics of households such as: age of the responder, education level of the responder, amount spent on expenditures, their affiliation with religious services, and more. The **SELBEN-II (s2)** survey was conducted around 4-5 years after the initial start. The data is relevant as the households were randomly sampled within each city and within the same government parish. This helped ensure the groups were geographically balanced. In addition, in randomly sampling 2645 households, this decreased the probability of selection bias that households whom received the transfer were different from those whom didn't.
+
+```{r, message=FALSE} 
+library(tidyverse)
+library(rdd)
+library(rdrobust)
+require(gridExtra)
+rm(list=ls())
+```
+The descriptive statistics are presented in Table 2. Since no data repository was provided, I went through and corresponded frequencies of each variable with their respective meaning (i.e.: denomination of "1" == Catholic). The sample means and standard deviations are also provided. 
+
+```{r, echo=FALSE}
+# code to filter and manipulate data to get the counts/percentages of each of the Xi's; each table has it's own dataframe in which to extract the necessary info/stats
+ir_df <- haven::read_dta("20140162_Data.dta")
+
+#Table 2 - religion stats
+ir_religion  <- ir_df %>% select(denomination) %>% 
+  group_by(denomination) %>% 
+  summarize(Observations = n()) %>% 
+  mutate(Percent = Observations/nrow(ir_df)*100) %>% 
+  select(Observations, Percent)
+
+relig_tib <- cbind(tibble(ir_religion$Observations), tibble(ir_religion$Percent))
+rownames(relig_tib) <- c("Catholic", "Non-Catholic Christian", "Jewish", "Atheist/none", "Other") #bind all data together 
+colnames(relig_tib) <- c("Obsv", "Percent") #add in column names
+
+#Table 2 - attendance stats
+ir_attend  <- ir_df %>% select(attendance) %>% 
+  group_by(attendance) %>% 
+  summarize(Observations = n()) %>% #count how many per categorical group
+  mutate(Percent = Observations/nrow(ir_df)*100) %>% 
+  select(Observations, Percent)
+
+sa_tib <- cbind(tibble(ir_attend$Observations), tibble(ir_attend$Percent))
+rownames(sa_tib) <- c("Never", "Special Occasions", "< 1 month", "Once/month", "2-3 times/month", "Once/week", "2-3 times/week", "4-6 times/week", "Every day")
+colnames(sa_tib) <- c("Obsv", "Percent")
+
+#Table 2 - means and sds
+ir_meansd <- ir_df %>% # filter out the selected categories
+  select(attendpermonth, religiousness, householdsize, ageresponder, schooling_resp, expenditures)
+
+mean <-  data.frame(as.list(apply(ir_meansd[1:6], 2, mean, na.rm = TRUE)))
+sd <- data.frame(as.list(apply(ir_meansd[1:6], 2, sd, na.rm = TRUE)))
+
+meansd <- matrix(c(mean, sd), nrow = 6, ncol = 2, byrow = FALSE) 
+colnames(meansd) <- c("Means", "SD")
+rownames(meansd) <- c("Attendance/mth", "Religiousness", "Household size", "Age", "Years of schooling", "Household expenditure")
+```
+##### Table 2: Descriptive Statistics - Religion
+```{r, echo=FALSE}
+relig_tib
+```
+##### Table 2: Descriptive Statistics - Service Attendance
+```{r, echo=FALSE}
+sa_tib
+```
+##### Table 2: Means and Standard Deviations
+```{r, echo=FALSE}
+meansd
+```
+
+> Part III: Model and Results: OLS  
+
+I first use sharp RDD methods in segregating households based on their s2 scores. In sharp RDD, being below/above the cutoff (`score2_1`) means the observation (household) is in the treatment or the control group. So Buser randomizes households on eligibility criteria if their s2 < 0 ($eligible = 1$), and ineligible if s2 > 0 ($eligible = 0$). The strict inequality does not change the group composition. When we are running regression analyses, the coefficient on the `eligible` binary indicator will be the estimate of the treatment effect.
+```{r}
+ir_new <- ir_df %>%  mutate(eligible = case_when(score2_1 >= 0 ~ 0, # not eligible
+                               score2_1 < 0 ~ 1)) # eligible
+```
+There is an ineligibility/eligibility issue. 
+```{r, echo = FALSE}
+ir_inelig_col <- ir_new %>%  select(collect_2, score2_1) %>% filter(collect_2 == "1" & score2_1 > 0) #38 ineligible, but collected
+nrow(ir_inelig_col)
+ir_elig_not <- ir_new %>% select(collect_2, score2_1) %>% filter(collect_2 =="0" & score2_1 < 0) #193 eligible, but did not collect
+nrow(ir_elig_not)
+```
+We find that there were 38 households eligible, but did not collect the transfer, and 193 households  ineligible, but still received the transfer. The sample size for all regressions in the paper was still 2645 - the size of the original dataset, so I have decided to bypass losing degrees of freedom by not removing these observations. However, I postulate this is the reason as to why Buser uses fuzzy RDD as household status is not solely determined by their s2. This may also result in differing coefficient estimates when running later regressions, as compared to Buser's results.
+
+Buser uses the model: $$Y = α + δeligible + f(s) + β(score2_1) + controls$$  
+**Define the variables as:**  
+$Y$: income measure  
+$eligible$: whether the household is eligible or not  
+$f(s)$: conditioning on the polynomial in $score2_1$  
+$score2_1$: SELBEN-II score  
+
+Let us first try fitting a linear model on the dataset. The asssumptions of no endogeneity and serial correlation seem valid in this model as the zero conditional mean ($E(u|X)=0$) is satisfied. In our OLS regression, I have decided to include score2_2 (score2_1*eligible) as a way to look at the effects of eligibility on s2. In addition, Buser controls for eligibility before the change (`moremoneyold`). 
+
+```{r, include = FALSE}
+# function to calculate the coefficients of different orders
+reg_vnpn <- function(variableY, score2_1poly) {
+  reg_vnpn <- summary(lm(variableY ~ eligible + score2_1poly + score2_2 + moremoneyold, data=ir_new)) 
+  coef(reg_vnpn)[2:2,] #only display coefficient on eligible var
+}
+```
+
+The following uses the **1st-order polynomial:**
+```{r, echo=FALSE}
+Church_Attend <- reg_vnpn(ir_new$attendpermonth, ir_new$score2_1) #poly order 1
+Evangelical <- reg_vnpn(ir_new$protestant, ir_new$score2_1)
+Religiousness <- reg_vnpn(ir_new$religiousness, ir_new$score2_1)
+
+lm_p1 <- rbind(Church_Attend, Evangelical, Religiousness) #display table of est. coefficients
+lm_p1
+```
+We see that at the 1% significance level, recipients spend about 1.39 more days at church services than non-recipients. At the 10% significant level, recipients are 5.12% percentage points more likely to be Evangelical.
+
+Let us conduct further regressions on different order polynomials of the s2 and income measures.
+
+The following uses the **2nd-order polynomial:**
+```{r, echo=FALSE} 
+Church_Attend <- reg_vnpn(ir_new$attendpermonth, ir_new$score2_1sq) #attendpermonth with order 2 on score2_1 (score2_1sq)
+Evangelical <- reg_vnpn(ir_new$protestant, ir_new$score2_1sq)
+Religiousness <- reg_vnpn(ir_new$religiousness, ir_new$score2_1sq)
+
+lm_p2 <- rbind(Church_Attend, Evangelical, Religiousness) #display table of est. coefficients
+lm_p2
+```
+
+The following uses **3rd-order polynomial:**
+```{r, echo=FALSE} 
+Church_Attend <- reg_vnpn(ir_new$attendpermonth, ir_new$score2_1cu) #1.01581362 0.40059788
+Evangelical <- reg_vnpn(ir_new$protestant, ir_new$score2_1cu) #0.03543929 0.02456966
+Religiousness <- reg_vnpn(ir_new$religiousness, ir_new$score2_1cu) #0.13547804 0.15537629
+
+lm_p3 <- rbind(Church_Attend, Evangelical, Religiousness)
+lm_p3
+```
+The replication results worsen in approximation to Buser's estimates as the order of the polynomial increases, and the coefficients also weaken in effect. This is most likely due to higher order polynomials becoming more complicated within regression fitting. Let's look at the discontinuity around s2 = 0 (which determines household eligibility). 
+
+Buser uses a binned approach to segregate households by their s2 scores. Let us try plotting the relationship between  
+(i) score2_1 & attendpermonth    
+(ii) score2_1 & protestant    
+```{r, echo = FALSE, message = FALSE}
+ir_test <- ir_new %>% 
+  group_by(binnr) %>% 
+  mutate(av_attend = mean(attendpermonth)) %>% # for every bin, we use the average value in that bin
+  mutate(av_prot = mean(protestant)) %>% 
+  mutate(av_relig = mean(religiousness))
+  # mutate(loghh = log(householdsize)) %>% 
+  # mutate(logexp = log(expenditures))
+
+# lm(av_attend ~ eligible + score2_1cu + score2_2cu + moremoneyold, ir_test)
+# lm(av_prot ~ eligible + score2_1 + score2_2 + moremoneyold, ir_test)
+# lm(av_relig ~ eligible + score2_1 + score2_2, ir_test)
+
+v1plot <- ggplot(data = ir_test, mapping = aes(x=score2_1, y=av_attend)) + geom_line() + geom_smooth(method="auto") + ggtitle("s2 v. Attendance per Month")
+v2plot <- ggplot(data = ir_test, mapping = aes(x=score2_1, y=av_prot)) + geom_line() + geom_smooth(method="auto") + ggtitle("s2 v. Evangelical Christianity")
+v3plot <- ggplot(data = ir_test, mapping = aes(x=score2_1, y=av_relig)) + geom_line() + geom_smooth(method="auto")
+# v1plot
+# v2plot
+```
+
+```{r, include = FALSE}
+grid.arrange(v1plot, v2plot, ncol=2)
+```
+
+We see that by using the auto-fit line method, it exhibits a polynomial relationship between s2 and `attendpermonth`, similarly with s2 and `protestant`. There is a sharp drop in the slope of the best-fit line around s2=0. This could potentially mean a higher order polynomial regression will fit the relationship better.
+
+(iii) score2_1 & religiousness
+```{r}
+v3plot
+```
+
+Getting similar results to (i) and (ii) from above. Using OLS is not plausible as linear regression is not a good estimation technique to analyze the effects of eligibility for cash transfer as around the cutoff, there is a noticeable difference in the slopes; a best-fit line with a constant slope cannot properly depict the effect of eligibility.
+
+Let's examine the relationship by plotting some Regression Discontinutiy (RD) plots between the income measure ($Y$) and the s2:
+```{r, echo=FALSE}
+a <- rdplot(ir_new$religiousness, ir_new$score2_1, c=0, p=1, scale = 0.50, title = ("RD plot of SELBEN-2 score v. Religiousness"), x.lab = ("SELBEN-2 Score"), y.lab = ("Religiousness"), y.lim = c(5,8), nbins = 23)
+a
+b <- rdplot(ir_new$attendpermonth, ir_new$score2_1, c=0, p=1, scale = 0.50, title = ("RD plot of SELBEN-2 score v. Attendance per Month"), x.lab = ("SELBEN-2 Score"), y.lab = ("Attendance per Month"), y.lim = c(3,7), nbins = 23)
+b
+c <- rdplot(ir_new$protestant, ir_new$score2_1, c=0, p=1, scale = 0.50, title = ("RD plot of SELBEN-2 score v. Evangelical Christianity"), x.lab = ("SELBEN-2 Score"), y.lab = ("Evangelical Christianity"), y.lim = c(0,0.40), nbins = 23)
+c
+```
+
+We see now that the slopes between the treatment and control groups are noticeably different. RDD would be the better estimation technique. As a final closing in this section in using the OLS model, we look at the McCrary 2008 Sorting test. This test examines the density of observations in the assignment variable, s2. 
+
+```{r, echo = FALSE}
+DCdensity(ir_new$score2_1, 0)
+```
+
+We see that there is a clear discontinuity in the density of s2, and this suggests that possibly some households were able to manipulate their treatment status. Manipulation as in some households were able to determine their position on the SELBEN-II index and reported a lower income status in order to receive the cash transfer. If this is true, it violates a major assumption of RDD  that individuals cannot manipulate their x value (i.e. households cannot manipulate their s2 to fall within the eligibility treatment group).  
+
+**Some possible explanations of manipulation may be that households in previous years received the cash transfer, and knowing the SELBEN-II index may be changed, may bias their income estimates downwards in order to ensure they receive it.**
+
+> Part IV: Advanced OLS & Results
+
+From Part III we see that using linear regression of Y (income measure) on X with other control variables can be severely biased for the causal effect of X on Y due to endogeneity. Since there may be different impacts based on being in the treatment or cuttoff group, we want instead to only examine the treatment effect around s2=0. To do this, we can use RDD to look at the effects of the treatment based on the running (forcing) variable of interest.
+
+RDD consists of sharp and fuzzy RDD. Sharp RDD is where all units below or above a threshold become treated, whereas the other half do not. Fuzzy RDD is a bit more complex in that the running variable being above/below a threshold only increases the *probability* of being treated, with other factors also influencing whether you actually get treated or not. We can think of sharp RDD as a selection-on-observables situation, whereas fuzzy RD is an IV-type setup.
+
+Some assumptions in RDD are that:
+- Assignment to treatment and control isn't random, but whether individual observation is treated is assumed to be random
+- Buser assumed that households cannot perfectly manipulate their s2
+- As a result, whether a household becomes eligible or not is random 
+
+I want to augment my analysis of the linear form by using an Instrumental Variable approach and trying a different model specification than the one Buser uses in the paper (within reason). 
+
+#### 1. Instrumental Variable Regression
+
+Fuzzy RDD means there is a higher probability of being in the treatment group. It can happen when there is a publicly suggested cutoff that's not enforced. We see this where some whom were eligible, did not collect - and the converse also being true. Let us estimate the causal effect of receiving the cash-benefit on attendance by 2SLS and instrumenting collect_2 (Z) with eligible while controlling for the running variables. This will allow us to investigate whether collect_2 was a valid variable in Buser’s regression model above. 
+
+**2SLS**  
+First stage: regress X on Z  
+Second stage: regress Y on fitted values (Y-hat)  
+IV model: Y (income measure) = b0 + b1*eligible + score2_1 + Z  
+
+```{r, include=FALSE}
+ivreg_func <- function (varY, varX, varZ, df) { 
+  stage1 <- lm(varX ~ varZ + score2_1, data = df) #regress X on Z
+  y_hat <- fitted(stage1) #take fitted values
+  stage2 <- lm(varY ~ y_hat, data = df) #regress Y on fitted values
+
+  reg <- ivreg(varY ~ varX | varZ, data = df) #IV regression
+  reg_final <- summary(reg)
+  coef(reg_final)[1:2,] #output coefficients
+}
+```
+
+```{r, echo = FALSE}
+ivreg_func(ir_new$attendpermonth, ir_new$collect_2, ir_new$eligible, ir_new) #attendance per month
+ivreg_func(ir_new$protestant, ir_new$collect_2, ir_new$eligible, ir_new) #protestant
+ivreg_func(ir_new$religiousness, ir_new$collect_2, ir_new$eligible, ir_new) #religiousness
+```
+
+In using IV, we find that households whom collect cash benefits increase the number of church attendances by 0.71 days per month. This is the average effect for people who collect the benefit because they are eligible (the compliers). This seems likely and consistent with Buser's other results as a positive income shock allows for increased time to attend services and a higher status. 
+
+#### 2. Misspecified model: 
+
+Buser may not have included all variables that  have explanatory power on Y. By including more explanatory variables that appear to explain Y, we can control for the X's and hopefully decrease omitted variable bias. As Ecuador is a relatively poor country, an increase in income could result in increased expenditure for the household. Usually, most of it is spent on children to close the gap caused by poverty [read more here](http://www.stuff.co.nz/dominion-post/comment/75556427/the-myth-of-how-families-in-poverty-spend-their-money). I want to look at level-log form to see if Y can be better explained by a change in the model. I will log the 3 variables below and look at their changes in p-value and coefficient estimate:
+- householdsize
+- education
+- expenditures
+
+```{r, echo=FALSE}
+ir_test <- ir_new %>%
+  filter(expenditures != "NA" & schooling_resp != "NA" & schooling_resp != "0" & expenditures != "0") %>% #otherwise log will produce -Inf
+  select(attendpermonth, householdsize, expenditures, schooling_resp, ageresponder, eligible, score2_1, collect_2) %>% 
+  mutate(leduc = log(schooling_resp)) %>% #mutate log forms of vars
+  mutate(lhhs = log(householdsize)) %>% 
+  mutate(lexp = log(expenditures))
+
+reg_nolog <- lm(attendpermonth ~ schooling_resp + householdsize + expenditures + expenditures + eligible + score2_1, ir_test) #no log reg
+reg_log <- lm(attendpermonth ~ leduc + lhhs + lexp + eligible + score2_1, ir_test) #log form reg
+
+summary(reg_nolog)
+summary(reg_log)
+```
+
+We see that in using the level-log form, `leduc` seems effective at capturing some of the effects on Y, as the p-value has decreased by 75%. We can run a regression to see the relationship of leduc on attendance.
+
+```{r, echo = FALSE}
+stage1 <- lm(attendpermonth ~ ir_test$leduc + score2_1, data = ir_test) 
+summary(stage1)
+```
+```{r, include = FALSE}
+#### Fuzzy RDD
+# I attempted Fuzzy RDD but I think it is incorrect as the coefficient estimates differ greatly from Buser's results. 
+# rdest_v1p1 <- summary(RDestimate(attendpermonth ~ score2_1 + eligible, data = ir_new, cutpoint = 0))["coefficients"]
+# v1p1 <- rdest_v1p1$coefficients[3,3]
+# 
+# rdest_v1p2 <- summary(RDestimate(attendpermonth ~ score2_1sq + eligible, data = ir_new, cutpoint = 8))["coefficients"]
+```
+
+> Part V: Conclusion
+
+**Summarize approach and findings:**  
+Based on the results I obtained using linear regression, the coefficient values are similar when compared to Table 4. Buser concludes that a difference in income does affect families and their frequency of church services and on the type of church they attend, and no effect on how religious people rate themselves to be. Although I was not able to perform a fuzzy RDD properly or determine the threshold treatment effect difference at s2=0, I obtained similar findings.
+
+**Strengths and weaknesses:**  
+Buser attempts to uncover the causality between income shocks and behaviors relating to religious association. By random sampling, Buser is assumed to achieve exogeneity in the error terms. In addition, as supported in tables within the Online Appendix, he validates that the F-statistics are high and well above the required thershold. A discontinuity density test was also performed on the controls as dependent variables, none varied greatly around the cutoff being conditinoal on score2_1. This implies thatHowever, there are some weaknesses. Both in Buser's and my results, we see that higher order polynomials showed a weakening effect in the explanatory variables. This may be as researched by Gelman and Imbens in their paper on ["Why High-Order Polynomials Should Not be Used in Regression Discontinuity Designs"](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.569.2504&rep=rep1&type=pdf), due to:
+
+**i. Noisy weights:** weights have unattractive properties and the higher the coefficient estimate, the more sensitive the estimate is to the order of the polynomial. We see this in the coefficient of `attendpermonth`, as the standard errors almost increase by 2-fold in polynomial order 1 vs. polynomial order 3 (Buser's Table 4).  
+**ii. Estimates become highly sensitive to the degree of the polynomial:** this is partly due to reason (i) above, and the confidence intervals become larger than necessary.  
+**iii. Inferences are not able to achieve nominal coverage:** the global polynomial approximations are not precise enough so that bias can be ignored when estimating the treatment effect.
+Although my coefficient estimates were similar to Buser's, my standard errors decrease as the poly order increases. This is also inconsistent with the findings of Gelman and Imbens.  
+```{r, echo = FALSE}
+lm_p1 #poly order 1
+lm_p2 #poly order 2 
+lm_p3 #poly order 3
+```
+In addition, randomization is not perfect as above. When the change in eligibilty came into effect, some households possibly did not collect their cash transfer as they did not know. This biases the estimates on the income measures as the household could have potentially been a part of the treatment/control, than not. As a result, this blurry line dividing households is instead captured within the error terms, and exogeneity may fail. If possible, it would be an interesting condition to query households on the amount they tithe at their church. In this way, it would allow for control of one of the reasons Busers attributes higher attendance religiously when income is low. If the tithe is low regardless of receiving the transfer or not, it would negate Buser's assumptions that receiving the transfer equates to more church attendances due to having higher status and extra income.
+
+There are also many qualitative factors that should be considered before estimating the causal effect of income shocks on religious participation. Buser speaks about the rise in Evangelical Christianity around the time the survey was conducted. As faith and religion depends on an intrinsic connection to the church, for some households - it may have also been the time that they were introduced to religion, and decided to attend. This would have been a correlation, rather than a causality. Furthermore, one could look at the effects on the household's children years after they started receiving the transfer. For in the [article](http://www.stuff.co.nz/dominion-post/comment/75556427/the-myth-of-how-families-in-poverty-spend-their-money), households whom have increased income spend more on their children. This could also have an effect on the choices the children makes later in terms of education or religion. By surveying the same household over different time periods (young mother vs. mid-age mother), it will allow for extrapolation of the causality of income effects on the choices made religiously.
+
+### References:   
+1. [Angirst & Pischke, 2009](ftp://nozdr.ru/biblio/kolxo3/G/GL/Angrist%20J.D.,%20Pischke%20J.-S.%20Mostly%20Harmless%20Econometrics%20(PUP,%202008)(ISBN%20069112034X)(O)(290s)_GL_.pdf)
+2. [Gelman, Imbens](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.569.2504&rep=rep1&type=pdf)
+3. [Pustejovsky, James](http://jepusto.github.io/rdd-interactions)
+4. https://economics.mit.edu/files/32
+5. [Article: The myth of how families in poverty spend their money](http://www.stuff.co.nz/dominion-post/comment/75556427/the-myth-of-how-families-in-poverty-spend-their-money)
+6. [Buser, Thomas - The Effect of Income on Religiousness](https://www.aeaweb.org/articles?id=10.1257/app.20140162)
+7. [R Markdown Basics](https://www.rstudio.com/wp-content/uploads/2015/02/rmarkdown-cheatsheet.pdf)
+8. [RPubs - Regression Discontinuity](https://rpubs.com/cuborican/RDD)
+9. [Stiggler, Matthieu](https://github.com/MatthieuStigler/RDDtools)
