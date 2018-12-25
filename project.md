@@ -1,7 +1,7 @@
 ---
-title: About
+title: Project
 ---
 
-# About Me
+# Projects
 
 [Go back](https://ggigigii.github.io/codingwithgigi/)
