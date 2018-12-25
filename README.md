@@ -1,4 +1,4 @@
-![alt text](IMG_2448.JPG)
+![alt text](IMG_2448.JPG | width=100)
 
 ## Welcome to my GitHub Page!
 
