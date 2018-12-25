@@ -8,7 +8,7 @@ I am currently a graduate student pursuing my Masters in Economics at the Univer
 
 This website will be mainly used to present coursework covered in my wide array of field courses and core classes. 
 
-[About](about.md)
+[See projects here](project.md)
 
 You may find me on LinkedIn [here](https://www.linkedin.com/in/gigilin0/).
 
