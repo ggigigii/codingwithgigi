@@ -1,4 +1,4 @@
-![](codingwithgigi/IMG_2448.JPG)
+![alt text](IMG_2448.JPG)
 
 ## Welcome to my GitHub Page!
 
