@@ -1,4 +1,4 @@
-![alt text](Screenshot 2018-12-25 18.14.47.png)
+![](thing.png)
 
 ## Welcome to my GitHub Page!
 
