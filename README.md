@@ -1,4 +1,4 @@
-![alt text](IMG_2448.JPG | width=100)
+![alt text](Screenshot 2018-12-25 18.14.47.png)
 
 ## Welcome to my GitHub Page!
 
